@@ -1,0 +1,122 @@
+name: Build Sely Launcher APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Sely Launcher
+    runs-on: ubuntu-24.04
+
+    steps:
+      # 1. Download repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Java required by Android Gradle Plugin
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 3. Android SDK
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+      # 4. Extract the uploaded SelyLauncher ZIP
+      - name: Extract Sely Launcher
+        run: |
+          rm -rf project
+          mkdir -p project
+
+          unzip -o SelyLauncher-1.zip -d project
+
+          echo "Extracted project:"
+          find project -maxdepth 3 -type f | sort
+
+      # 5. Enable AndroidX
+      - name: Configure AndroidX
+        working-directory: project/SelyLauncher
+        run: |
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          EOF
+
+          echo "gradle.properties:"
+          cat gradle.properties
+
+      # 6. Check that this is really an Android project
+      - name: Verify project
+        working-directory: project/SelyLauncher
+        run: |
+          test -f build.gradle.kts
+          test -f settings.gradle.kts
+          test -f app/build.gradle.kts
+          test -d app/src/main
+
+          echo "Android project verified successfully."
+
+      # 7. Prepare Gradle
+      - name: Prepare Gradle
+        working-directory: project/SelyLauncher
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          else
+            echo "Gradle wrapper not included in ZIP."
+            echo "Installing Gradle 8.7 temporarily..."
+
+            wget -q \
+              https://services.gradle.org/distributions/gradle-8.7-bin.zip
+
+            unzip -q gradle-8.7-bin.zip
+
+            ./gradle-8.7/bin/gradle wrapper --gradle-version 8.7
+
+            chmod +x gradlew
+          fi
+
+      # 8. Build APK
+      - name: Build Sely Launcher Debug APK
+        working-directory: project/SelyLauncher
+        run: |
+          ./gradlew assembleDebug --stacktrace
+
+      # 9. Verify APK exists
+      - name: Verify APK
+        run: |
+          APK="project/SelyLauncher/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            find project -name "*.apk" -type f
+            exit 1
+          fi
+
+          echo "APK successfully built:"
+          ls -lh "$APK"
+
+      # 10. Upload APK to GitHub Actions
+      - name: Upload Sely Launcher APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sely-Launcher-APK
+          path: project/SelyLauncher/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
